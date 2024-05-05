@@ -20,6 +20,10 @@ class Detector:
         self.readClasses()
         self.known_width = 10
         self.focal_length = 280
+        self.persons_detected = 0
+        self.chairs_detected = 0
+        self.tables_detected = 0
+        self.top_objects = []
 
     def readClasses(self):
         with open(self.classesPath, 'r') as f:
@@ -40,6 +44,10 @@ class Detector:
 
         (success, image) = cap.read()
 
+        self.persons_detected = 0
+        self.chairs_detected = 0
+        self.tables_detected = 0
+
         while success:
             classLabelIDs, confidences, bboxs = self.net.detect(image, confThreshold = 0.4)
 
@@ -48,6 +56,12 @@ class Detector:
             confidences = list(map(float, confidences))
 
             bboxIdx = cv2.dnn.NMSBoxes(bboxs, confidences, score_threshold = 0.5, nms_threshold = 0.2)
+            
+            self.persons_detected = 0
+            self.chairs_detected = 0
+            self.tables_detected = 0
+
+            object_confidences = {}
 
             if len(bboxIdx) != 0:
                 for i in range(0, len(bboxIdx)):
@@ -55,6 +69,18 @@ class Detector:
                     classConfidence = confidences[np.squeeze(bboxIdx[i])]
                     classLabelID = np.squeeze(classLabelIDs[np.squeeze(bboxIdx[i])])
                     classLabel = self.classesList[classLabelID]
+
+                    if classLabel == 'person':
+                        self.persons_detected += 1
+                    if classLabel == 'chair':
+                        self.chairs_detected += 1
+                    if classLabel == 'table':
+                        self.tables_detected += 1
+
+                    if classLabel not in object_confidences:
+                        object_confidences[classLabel] = classConfidence
+                    else:
+                        object_confidences[classLabel] = max(object_confidences[classLabel], classConfidence)
 
                     classColor = [int(c) for c in self.colorList[classLabelID]]
 
@@ -68,6 +94,16 @@ class Detector:
                     object_width = w
                     distance = self.calculate_distance(known_width=10, focal_length=self.focal_length, per_width=object_width)
                     cv2.putText(image, f"Distance: {distance:.2f} cm", (x, y + h + 20), cv2.FONT_HERSHEY_PLAIN, 1, classColor, 2)
+
+            sorted_objects = sorted(object_confidences.items(), key=lambda x: x[1], reverse=True)
+            self.top_objects = [obj[0] for obj in sorted_objects[:5]]
+
+
+            # print(self.persons_detected)  # Number of persons detected.
+            # print(self.chairs_detected)   # Number of chairs detected.    
+            # print(self.tables_detected)   # Number of tables detected.
+            # print(self.top_objects)       # 5 objects detected with max confidence.
+
 
             cv2.imshow("Result", image)
 
