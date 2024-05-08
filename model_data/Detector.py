@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import requests
-import threading
 
 np.random.seed(20)
 
@@ -21,7 +20,6 @@ class Detector:
         self.readClasses()
         self.known_width = 10
         self.focal_length = 280
-        self.stop_event = threading.Event()
 
     def readClasses(self):
         with open(self.classesPath, 'r') as f:
@@ -54,7 +52,13 @@ class Detector:
             confidences = list(np.array(confidences).reshape(1,-1)[0])
             confidences = list(map(float, confidences))
 
-            bboxIdx = cv2.dnn.NMSBoxes(bboxs, confidences, score_threshold=0.5, nms_threshold=0.2)
+            bboxIdx = cv2.dnn.NMSBoxes(bboxs, confidences, score_threshold = 0.5, nms_threshold = 0.2)
+            
+            self.persons_detected = 0
+            self.chairs_detected = 0
+            self.tables_detected = 0
+
+            object_confidences = {}
 
             if len(bboxIdx) != 0:
                 for i in range(0, len(bboxIdx)):
@@ -62,6 +66,18 @@ class Detector:
                     classConfidence = confidences[np.squeeze(bboxIdx[i])]
                     classLabelID = np.squeeze(classLabelIDs[np.squeeze(bboxIdx[i])])
                     classLabel = self.classesList[classLabelID]
+
+                    if classLabel == 'person':
+                        self.persons_detected += 1
+                    if classLabel == 'chair':
+                        self.chairs_detected += 1
+                    if classLabel == 'table':
+                        self.tables_detected += 1
+
+                    if classLabel not in object_confidences:
+                        object_confidences[classLabel] = classConfidence
+                    else:
+                        object_confidences[classLabel] = max(object_confidences[classLabel], classConfidence)
 
                     classColor = [int(c) for c in self.colorList[classLabelID]]
 
@@ -77,6 +93,7 @@ class Detector:
                     cv2.putText(frame, f"Distance: {distance:.2f} cm", (x, y + h + 20), cv2.FONT_HERSHEY_PLAIN, 1, classColor, 2)
 
             cv2.imshow("Result", frame)
+
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or self.stop_event.is_set():
