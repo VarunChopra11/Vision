@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import requests
+import threading
 
 np.random.seed(20)
 
@@ -20,6 +21,7 @@ class Detector:
         self.readClasses()
         self.known_width = 10
         self.focal_length = 280
+        self.stop_event = threading.Event()
 
     def readClasses(self):
         with open(self.classesPath, 'r') as f:
@@ -32,22 +34,19 @@ class Detector:
         return (known_width * focal_length) / per_width
 
     def receive_frames(self):
-        try:
-            stream = requests.get(self.server_address, stream=True)
-            bytes_received = bytes()
-            for chunk in stream.iter_content(chunk_size=1024):
-                bytes_received += chunk
-                a = bytes_received.find(b'\xff\xd8') # JPEG start marker
-                b = bytes_received.find(b'\xff\xd9') # JPEG end marker
-                if a != -1 and b != -1:
-                    jpg = bytes_received[a:b+2]
-                    bytes_received = bytes_received[b+2:]
-                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                    yield frame
-        except requests.RequestException as e:
-            print("Error receiving frames from server:", e)
+        stream = requests.get(self.server_address, stream=True)
+        bytes_received = bytes()
+        for chunk in stream.iter_content(chunk_size=1024):
+            bytes_received += chunk
+            a = bytes_received.find(b'\xff\xd8') # JPEG start marker
+            b = bytes_received.find(b'\xff\xd9') # JPEG end marker
+            if a != -1 and b != -1:
+                jpg = bytes_received[a:b+2]
+                bytes_received = bytes_received[b+2:]
+                frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                yield frame
 
-    def onVideo(self):
+    def process_frames(self):
         for frame in self.receive_frames():
             classLabelIDs, confidences, bboxs = self.net.detect(frame, confThreshold=0.4)
 
@@ -80,7 +79,13 @@ class Detector:
             cv2.imshow("Result", frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            if key == ord("q") or self.stop_event.is_set():
                 break
 
         cv2.destroyAllWindows()
+
+    def start_processing(self):
+        threading.Thread(target=self.process_frames, daemon=True).start()
+
+    def stop_processing(self):
+        self.stop_event.set()
