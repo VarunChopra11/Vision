@@ -1,35 +1,109 @@
 import cv2
 import numpy as np
-import requests
+import os
+import time
 
-stream_url = 'http://192.168.137.246/'  # Replace this with your server URL
+KNOWN_WIDTHS = {
+    "person": 0.5,  # meters
+    "car": 2,  # meters
+    # Add more objects with their known widths if needed
+}
 
-# Function to read JPEGs from HTTP stream
-def read_jpeg_stream(url):
-    # Open the stream
-    stream = requests.get(url, stream=True)
-    if stream.status_code == 200:
-        bytes_data = bytes()
-        for chunk in stream.iter_content(chunk_size=1024):
-            bytes_data += chunk
-            a = bytes_data.find(b'\xff\xd8')
-            b = bytes_data.find(b'\xff\xd9')
-            if a != -1 and b != -1:
-                jpg = bytes_data[a:b + 2]
-                bytes_data = bytes_data[b + 2:]
-                yield cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-    else:
-        print("Failed to open stream")
+class Detector:
+    def __init__(self, videoPath, configPath, modelPath, classesPath, focalLength=500):
+        self.videoPath = videoPath
+        self.configPath = configPath
+        self.modelPath = modelPath
+        self.classesPath = classesPath
+        self.focalLength = focalLength
 
-# Main function to display the stream
-def display_stream(url):
-    cap = read_jpeg_stream(url)
-    while True:
-        frame = next(cap)
-        cv2.imshow('Frame', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    cv2.destroyAllWindows()
+        self.net = cv2.dnn_DetectionModel(self.modelPath, self.configPath)
+        self.net.setInputSize(320, 320)
+        self.net.setInputScale(1.0 / 127.5)
+        self.net.setInputMean((127.5, 127.5, 127.5))
+        self.net.setInputSwapRB(True)
 
-if __name__ == "__main__":
-    display_stream(stream_url)
+        self.readClasses()
+        self.objects_within_distance = {}  # Dictionary to store objects within distance
+
+    def readClasses(self):
+        with open(self.classesPath, 'r') as f:
+            self.classesList = f.read().splitlines()
+
+        self.classesList.insert(0, '__Background__')
+        self.colorList = np.random.uniform(low=0, high=255, size=(len(self.classesList), 3))
+
+    def distance_to_camera(self, knownWidth, focalLength, perWidth):
+        # compute and return the distance from the object to the camera
+        return (knownWidth * focalLength) / perWidth
+
+    def onVideo(self):
+        cap = cv2.VideoCapture(self.videoPath)
+
+        if not cap.isOpened():
+            print("Error Opening Video File...")
+            return
+
+        while True:
+            ret, frame = cap.read()
+
+            if not ret:
+                break
+
+            classLabelIDs, confidences, bboxs = self.net.detect(frame, confThreshold=0.4)
+
+            if len(classLabelIDs) != 0:
+                current_time = time.time()
+                for classLabelID, confidence, bbox in zip(classLabelIDs, confidences, bboxs):
+                    bbox = list(map(int, bbox))
+                    classLabel = self.classesList[classLabelID[0]]
+
+                    # Calculate distance
+                    if classLabel in KNOWN_WIDTHS:
+                        width = bbox[2] - bbox[0]
+                        distance = self.distance_to_camera(KNOWN_WIDTHS[classLabel], self.focalLength, width)
+                        distance_text = "Distance: {:.2f}m".format(distance)
+                        if distance < 0.3:
+                            if classLabelID[0] not in self.objects_within_distance:
+                                print(f"{classLabel} detected within 0.3m.")
+                                self.objects_within_distance[classLabelID[0]] = current_time
+                            else:
+                                if current_time - self.objects_within_distance[classLabelID[0]] >= 1:
+                                    self.objects_within_distance[classLabelID[0]] = current_time
+                        else:
+                            if classLabelID[0] in self.objects_within_distance:
+                                if distance > 0.5:
+                                    del self.objects_within_distance[classLabelID[0]]
+
+                    else:
+                        distance_text = "Distance: Unknown"
+
+                    # Draw rectangle and text
+                    color = [int(c) for c in self.colorList[classLabelID[0]]]
+                    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, thickness=1)
+                    cv2.putText(frame, distance_text, (bbox[0], bbox[3] + 20), cv2.FONT_HERSHEY_PLAIN, 1, color, 2)
+                    cv2.putText(frame, "{}: {:.2f}".format(classLabel, confidence),
+                                (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, color, 2)
+
+            cv2.imshow("Result", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+def main():
+    videoPath = 0  # For webcam, replace video path address with '0'.
+    configPath = os.path.join("model_data", "ssd_mobilenet_v3_large_coco_2020_01_14.pbtxt")
+    modelPath = os.path.join("model_data", "frozen_inference_graph.pb")
+    classesPath = os.path.join("model_data", "coco.names")
+
+    focalLength = 500  # Adjust this value according to your camera setup
+
+    detector = Detector(videoPath, configPath, modelPath, classesPath, focalLength)
+    detector.onVideo()
+
+
+if __name__ == '__main__':
+    main()
